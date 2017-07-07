@@ -1,12 +1,5 @@
 const file_system = require('fs');
 
-const MIGRATION_SCHEMA_NAME = 'migration_schema';
-const MIGRATION_SCHEMA = `CREATE TABLE \`${MIGRATION_SCHEMA_NAME}\` (
-                            \`version\` INT PRIMARY KEY AUTO_INCLEMENT,
-                            \`name\` VARCHAR(250) NOT NULL,
-                            \`hash_sum\` VARCHAR(50) NOT NULL
-                            \`date\` DATETIME DEFAULT CURRENT_TIMESTAMP
-                            \`success\` TINYINT(1) default 0)`;
 
 /**
  * entry point to start migration util
@@ -28,12 +21,41 @@ module.exports.migrate = function(mysql_connection, migrations_folder) {
         migrate(mysql_connection, migrations_folder);
     } else if (command === 'clean') {
         clean(mysql_connection);
+    } else if (command === 'init') {
+        init(mysql_connection);
     }
 };
 
+/**
+ * create empty migration schema table
+ *
+ * @param mysql_connection {Connection} -  to work with database
+ */
+function init(mysql_connection) {
+    "use strict";
+
+    let query = `CREATE TABLE \`migration_schema\` (
+                    \`version\` INT PRIMARY KEY AUTO_INCREMENT,
+                    \`name\` VARCHAR(250) NOT NULL,
+                    \`hash_sum\` VARCHAR(50) NOT NULL,
+                    \`date\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    \`success\` TINYINT(1) DEFAULT 0) ENGINE = InnoDB`;
+
+    mysql_connection.query(query, function (err) {
+        if (err) {
+            error(err.message);
+
+            mysql_connection.end();
+        } else {
+            info('created empty migration schema');
+
+            mysql_connection.end();
+        }
+    });
+}
 
 /**
- * drop all tables in database and create migration schema new table
+ * drop all tables in database
  *
  * @param mysql_connection {Connection} -  to work with database
  */
