@@ -197,7 +197,7 @@ function help_message() {
     info('\t\t V(version name)__name_of_script_separated_with_lower_underline.sql');
     info('\t\t V1__init_tables.sql');
     info('\t\t V2__add_new_column.sql');
-    info('for more info visit: ');
+    info('for more info visit: https://github.com/borsch/node-mysql-migration/blob/master/README.md');
     info('========================================================');
 }
 
