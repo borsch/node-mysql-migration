@@ -1,6 +1,6 @@
 {
   "name": "node-mysql-migration",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "migration util for mysql database",
   "main": "index.js",
   "scripts": {
