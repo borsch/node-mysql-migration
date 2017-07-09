@@ -5,6 +5,7 @@ This plugin is create to simplify migration of mysql database migration.
 <h2>Using</h2>
 
 <h3>Installing</h3>
+
 `npm install node-mysql-migration` - to install util
 
 <h3>Setup</h3>
