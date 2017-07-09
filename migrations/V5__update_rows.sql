@@ -1,0 +1,1 @@
+UPDATE migration_test SET SECOND_VALUE="asd";
