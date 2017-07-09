@@ -35,11 +35,10 @@ function init(mysql_connection) {
     "use strict";
 
     let query = `CREATE TABLE \`migration_schema\` (
-                    \`version\` INT PRIMARY KEY AUTO_INCREMENT,
-                    \`name\` VARCHAR(250) NOT NULL,
+                    \`version\` INT PRIMARY KEY,
+                    \`name\` TEXT NOT NULL,
                     \`hash_sum\` VARCHAR(50) NOT NULL,
-                    \`date\` DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    \`success\` TINYINT(1) DEFAULT 0) ENGINE = InnoDB`;
+                    \`date\` DATETIME DEFAULT CURRENT_TIMESTAMP) ENGINE = InnoDB`;
 
     mysql_connection.query(query, function (err) {
         if (err) {
@@ -138,9 +137,9 @@ function migrate(mysql_connection, migrations_folder) {
     file_system.readdir(migrations_folder, (err, files) => {
         if (files) {
             if (files.length < 1) {
-                warning('migration folder "' + migrations_folder + '" does not contains any migration');
+                warning('migration folder [' + migrations_folder + '] does not contains any migration');
             } else {
-                info('found ' + files.length + ' migrations');
+                info('found [' + files.length + '] migrations');
 
                 let migrations = [];
                 for (let i = 0; i < files.length; ++i) {
@@ -185,19 +184,156 @@ function precess_migrations(mysql_connection, migrations) {
         return 0;
     });
 
-    check_old_migrations_checksum(mysql_connection, migrations, once(function(message){
-        if (!message) {
-            info('All existed migrations successfully applied to database');
+    check_old_migrations_checksum(mysql_connection, migrations, once(function(applied_result){
+        if (!applied_result) {
+            info('all existed migrations successfully applied to database');
         } else {
-            if (parseInt(message)) {
-                warning('new not applied migration is: ' + message);
+            let type = applied_result.type,
+                version = applied_result.version;
+
+            if (type) {
+                if (type === 'SCRIPT_CHANGED') {
+                    error('script version[' + version + '] is change since last migration');
+                } else {
+                    error('can not apply migration version[' + version + '] since there is en unexpected error');
+                }
+
+                mysql_connection.end();
             } else {
-                error(message);
+                info('new not applied migration is [' + version + ']');
+
+                for (let i = 0; i < migrations.length; ++i) {
+                    if (migrations[i].version === version) {
+                        migrations = migrations.splice(i);
+
+                        break;
+                    }
+                }
+
+                if (migrations.length > 0) {
+                    try {
+                        let promise = apply_migration(mysql_connection, migrations[0], file_system.readFileSync(migrations[0].absolute_path, "utf8"))
+                            .catch(function (version) {
+                                console.log(version);
+                            });
+
+                    for (let i = 1; i < migrations.length; ++i) {
+                        promise =
+                            promise.then(function () {
+                                return apply_migration(mysql_connection, migrations[i], file_system.readFileSync(migrations[i].absolute_path, "utf8"));
+                            })
+                                .catch(function (version) {
+                                    console.log(version);
+                                });
+                    }
+
+                    promise
+                        .then(function () {
+                            info('all migrations successfully applied to database');
+
+                            mysql_connection.end();
+                        })
+                        .catch(function (version) {
+                            console.log(version);
+
+                            mysql_connection.end();
+                        });
+                    } catch (e) {
+                        console.log(e);
+                    }
+                }
             }
         }
     }));
 }
 
+function apply_migration(mysql_connection, migration, content) {
+    "use strict";
+
+    return new Promise(function(global_resolve, global_reject){
+        new Promise(function(resolve, reject){
+            mysql_connection.beginTransaction(function(err){
+                if (err) {
+                    mysql_connection.rollback();
+
+                    reject({
+                        message: 'can not start transaction. reason [' + err.message + ']'
+                    });
+                } else {
+                    resolve();
+                }
+            });
+        })
+            .then(function(){
+                new Promise(function(resolve, reject){
+                    mysql_connection.query(content, function(err){
+                        if (err) {
+                            mysql_connection.rollback();
+
+                            error('can not apply migration[' + migration.version + ']');
+                            reject({
+                                message: 'can not execute query. reason [' + err.message + ']'
+                            });
+                        } else {
+                            resolve();
+                        }
+                    })
+                })
+                    .then(function(){
+                        new Promise(function(resolve, reject){
+                            let to_insert = {
+                            version: migration.version,
+                            hash_sum: migration.hash_sum,
+                            name: migration.name
+                        };
+                            mysql_connection.query('INSERT INTO migration_schema SET ?', to_insert, function(err){
+                                if (err) {
+                                    mysql_connection.rollback();
+
+                                    error('can not apply migration[' + migration.version + ']');
+                                    reject({
+                                        message: 'can not execute query. reason [' + err.message + ']'
+                                    });
+                                } else {
+                                    resolve();
+                                }
+                            })
+                        })
+                            .then(function(){
+                                new Promise(function(resolve, reject){
+                                    mysql_connection.commit(function(err) {
+                                        if (err) {
+                                            error('can not apply migration[' + migration.version + ']');
+                                            reject({
+                                                message: 'can not execute query. reason [' + err.message + ']'
+                                            });
+                                        } else {
+                                            info('migration [' + migration.version + '][' + migration.name + '] successfully applied');
+
+                                            resolve();
+                                        }
+                                    });
+                                })
+                                    .then(function(){
+                                        global_resolve();
+                                    })
+                                    .catch(function(err){
+                                        error(err.message);
+                                    });
+                            })
+                            .catch(function(err){
+                                error(err.message);
+                            })
+                    })
+                    .catch(function(err){
+                        error(err.message);
+                    })
+            })
+            .catch(function(err){
+                error(err.message);
+            })
+    });
+}
 
 /**
  * checks all existed migrations in database if they does not changed
@@ -208,7 +344,7 @@ function precess_migrations(mysql_connection, migrations) {
 function check_old_migrations_checksum(mysql_connection, migrations, callback) {
     "use strict";
 
-    let promise = sync(mysql_connection, migrations[0])
+    let promise = sync_check_migration(mysql_connection, migrations[0])
         .catch(function (version) {
             callback(version);
         });
@@ -216,7 +352,7 @@ function check_old_migrations_checksum(mysql_connection, migrations, callback) {
     for (let i = 1; i < migrations.length; ++i) {
         promise =
             promise.then(function () {
-                return sync(mysql_connection, migrations[i]);
+                return sync_check_migration(mysql_connection, migrations[i]);
             })
             .catch(function (version) {
                 callback(version);
@@ -232,21 +368,31 @@ function check_old_migrations_checksum(mysql_connection, migrations, callback) {
         });
 }
 
-function sync(mysql_connection, migration) {
+/**
+ * make sync promise-chain base call to database to check last applied migration
+ *
+ * @param mysql_connection {Connection} -  to work with database
+ * @param migration {object} - migration to check
+ * @return {Promise} - contains the result if {migration} is successfully applied
+ */
+function sync_check_migration(mysql_connection, migration) {
     "use strict";
 
     return new Promise(function(resolve, reject){
         let migration_inside = migration;
-        mysql_connection.query('SELECT hash_sum,success FROM migration_schema WHERE version=' + migration_inside.version, function(err, result){
+        mysql_connection.query('SELECT hash_sum FROM migration_schema WHERE version=' + migration_inside.version, function(err, result){
             if (err || !result || result.length < 1) {
-                reject(migration_inside.version);
+                reject({
+                    version: migration_inside.version
+                });
             } else {
                 let row = result[0];
 
                 if (row.hash_sum !== migration.hash_sum) {
-                    reject('Script version[' + migration_inside.version + '] has changed');
-                } else if (!row.success) {
-                    reject('Script version[' + migration_inside.version + '] has not been successfully applied');
+                    reject({
+                        version: migration_inside.version,
+                        type: 'SCRIPT_CHANGED'
+                    });
                 } else {
                     resolve();
                 }
@@ -255,6 +401,13 @@ function sync(mysql_connection, migration) {
     });
 }
 
+/**
+ * function the will be executed only for once
+ *
+ * @param fn - function to be executed only once
+ * @param context
+ * @return {Function}
+ */
 function once(fn, context) {
     let result;
 
@@ -279,14 +432,12 @@ function parse_file(file_name, full_path_to_file) {
 
     let matches = /V(\d+)__([\w\_]+)\.sql/g.exec(file_name);
     if (!matches || matches.index < 0) {
-        console.log(matches);
-
-        throw new Error(`file '${file_name}' has an invalid file name template\nSee help for more information`);
+        throw new Error(`file ['${file_name}'] has an invalid file name template\nSee help for more information`);
     }
 
     return {
         version: parseInt(matches[1]),
-        name: matches[2].replace('_', ' '),
+        name: matches[2].replace(/_/g, ' '),
         hash_sum: md5_sum.sync(full_path_to_file),
         absolute_path: full_path_to_file
     }
@@ -331,10 +482,10 @@ function help_message() {
     info('========================================================');
     info('required execution params');
     info('possible params are');
-    info('`help` - print help message');
-    info('`migrate` - migrate DB using new migrations if new is existed');
-    info('`clean` - drop all tables in database');
-    info('`init` - create an empty migration schema in DB');
+    info('[help] - print help message');
+    info('[migrate] - migrate DB using new migrations if new is existed');
+    info('[clean] - drop all tables in database');
+    info('[init] - create an empty migration schema in DB');
     info('file name pattern is:');
     info('\t\t V(version name)__name_of_script_separated_with_lower_underline.sql');
     info('\t\t V1__init_tables.sql');

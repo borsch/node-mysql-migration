@@ -1,0 +1,2 @@
+ALTER TABLE `migration_test`
+    ADD COLUMN `SECOND_VALUE2` VARCHAR(250);
