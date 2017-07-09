@@ -22,11 +22,8 @@
     "url": "https://github.com/borsch/node-mysql-migration/issues"
   },
   "homepage": "https://github.com/borsch/node-mysql-migration#readme",
-  "devDependencies": {
-    "chai": "^4.0.2",
-    "mocha": "^3.4.2"
-  },
   "dependencies": {
+    "md5-file": "^3.1.1",
     "mysql": "^2.13.0"
   }
 }

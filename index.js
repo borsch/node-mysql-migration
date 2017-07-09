@@ -1,5 +1,5 @@
 const file_system = require('fs');
-
+const md5_sum = require('md5-file');
 
 /**
  * entry point to start migration util
@@ -126,7 +126,7 @@ function clean(mysql_connection) {
 }
 
 /**
- * this function executes new migrations
+ * this function is an entry point to execute new migrations
  * if new are exists
  *
  * @param mysql_connection {Connection} -  to work with database
@@ -142,12 +142,154 @@ function migrate(mysql_connection, migrations_folder) {
             } else {
                 info('found ' + files.length + ' migrations');
 
+                let migrations = [];
+                for (let i = 0; i < files.length; ++i) {
+                    try {
+                        let result = parse_file(files[i], migrations_folder + '/' + files[i]);
+                        migrations.push(result);
+                    } catch (e) {
+                        error(e.message);
 
+                        return;
+                    }
+                }
+
+                precess_migrations(mysql_connection, migrations);
             }
         } else {
-            throw err;
+            error(err.message);
+
+            mysql_connection.end();
         }
     });
+}
+
+
+/**
+ * this function executes new migrations
+ * if new are exists
+ *
+ * @param mysql_connection {Connection} -  to work with database
+ * @param migrations {object[]} - all existed migrations data
+ */
+function precess_migrations(mysql_connection, migrations) {
+    "use strict";
+
+    migrations.sort(function(a, b){
+        if (a.version > b.version) {
+            return 1;
+        }
+        if (a.version < b.version) {
+            return -1;
+        }
+        return 0;
+    });
+
+    check_old_migrations_checksum(mysql_connection, migrations, once(function(message){
+        if (!message) {
+            info('All existed migrations successfully applied to database');
+        } else {
+            if (parseInt(message)) {
+                warning('new not applied migration is: ' + message);
+            } else {
+                error(message);
+            }
+        }
+    }));
+}
+
+
+/**
+ * checks all existed migrations in database if they does not changed
+ *
+ * @param mysql_connection {Connection} -  to work with database
+ * @param migrations {object[]} - all existed migrations data
+ */
+function check_old_migrations_checksum(mysql_connection, migrations, callback) {
+    "use strict";
+
+    let promise = sync(mysql_connection, migrations[0])
+        .catch(function (version) {
+            callback(version);
+        });
+
+    for (let i = 1; i < migrations.length; ++i) {
+        promise =
+            promise.then(function () {
+                return sync(mysql_connection, migrations[i]);
+            })
+            .catch(function (version) {
+                callback(version);
+            });
+    }
+
+    promise
+        .then(function () {
+            callback(null);
+        })
+        .catch(function (version) {
+            callback(version);
+        });
+}
+
+function sync(mysql_connection, migration) {
+    "use strict";
+
+    return new Promise(function(resolve, reject){
+        let migration_inside = migration;
+        mysql_connection.query('SELECT hash_sum,success FROM migration_schema WHERE version=' + migration_inside.version, function(err, result){
+            if (err || !result || result.length < 1) {
+                reject(migration_inside.version);
+            } else {
+                let row = result[0];
+
+                if (row.hash_sum !== migration.hash_sum) {
+                    reject('Script version[' + migration_inside.version + '] has changed');
+                } else if (!row.success) {
+                    reject('Script version[' + migration_inside.version + '] has not been successfully applied');
+                } else {
+                    resolve();
+                }
+            }
+        });
+    });
+}
+
+function once(fn, context) {
+    let result;
+
+    return function() {
+        if(fn) {
+            result = fn.apply(context || this, arguments);
+            fn = null;
+        }
+
+        return result;
+    };
+}
+
+/**
+ * parse file name {version, name, hash_sum}
+ *
+ * @param file_name {string} - file name
+ * @param full_path_to_file {string} - absolute file path
+ */
+function parse_file(file_name, full_path_to_file) {
+    "use strict";
+
+    let matches = /V(\d+)__([\w\_]+)\.sql/g.exec(file_name);
+    if (!matches || matches.index < 0) {
+        console.log(matches);
+
+        throw new Error(`file '${file_name}' has an invalid file name template\nSee help for more information`);
+    }
+
+    return {
+        version: parseInt(matches[1]),
+        name: matches[2].replace('_', ' '),
+        hash_sum: md5_sum.sync(full_path_to_file),
+        absolute_path: full_path_to_file
+    }
 }
 
 /**
