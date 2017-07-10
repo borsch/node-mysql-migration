@@ -60,7 +60,24 @@ UPDATE `tbl_name` SET `column_name`="asd";
 
 then migration will fails.
 <br />
-to solve this <b>split such migration into three separate migration</b>
+to solve this <b>split such migration into three separate migration</b> 
+<br />
+<b>OR</b>
+<br />
+customize your connection settings. use: 
+
+```javascript
+migration.migrate(mysql.createConnection({
+    host     : 'host',
+    user     : 'user',
+    password : 'password',
+    database : 'database',
+    multipleStatements: true // add this to allow multiple queries in single migration file
+}), __dirname + '/migrations');
+````
+
+official [`node-mysql` doc](https://github.com/mysqljs/mysql#multiple-statement-queries)
+
 
 <h2>Commands</h2>
 
