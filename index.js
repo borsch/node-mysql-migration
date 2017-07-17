@@ -217,27 +217,27 @@ function precess_migrations(mysql_connection, migrations) {
                                 console.log(version);
                             });
 
-                    for (let i = 1; i < migrations.length; ++i) {
-                        promise =
-                            promise.then(function () {
-                                return apply_migration(mysql_connection, migrations[i], file_system.readFileSync(migrations[i].absolute_path, "utf8"));
+                        for (let i = 1; i < migrations.length; ++i) {
+                            promise =
+                                promise.then(function () {
+                                    return apply_migration(mysql_connection, migrations[i], file_system.readFileSync(migrations[i].absolute_path, "utf8"));
+                                })
+                                    .catch(function (version) {
+                                        console.log(version);
+                                    });
+                        }
+
+                        promise
+                            .then(function () {
+                                info('all migrations successfully applied to database');
+
+                                mysql_connection.end();
                             })
-                                .catch(function (version) {
-                                    console.log(version);
-                                });
-                    }
+                            .catch(function (version) {
+                                console.log(version);
 
-                    promise
-                        .then(function () {
-                            info('all migrations successfully applied to database');
-
-                            mysql_connection.end();
-                        })
-                        .catch(function (version) {
-                            console.log(version);
-
-                            mysql_connection.end();
-                        });
+                                mysql_connection.end();
+                            });
                     } catch (e) {
                         console.log(e);
                     }
@@ -250,88 +250,72 @@ function precess_migrations(mysql_connection, migrations) {
 function apply_migration(mysql_connection, migration, content) {
     "use strict";
 
-    return new Promise(function(global_resolve, global_reject){
-        new Promise(function(resolve, reject){
+    function rollback_end() {
+        mysql_connection.rollback();
+        mysql_connection.end();
+    }
+
+    return new Promise(function(global_resolve){
+        new Promise(function(resolve){
             mysql_connection.beginTransaction(function(err){
                 if (err) {
-                    mysql_connection.rollback();
+                    rollback_end();
 
-                    reject({
-                        message: 'can not start transaction. reason [' + err.message + ']'
-                    });
+                    error('can not start transaction. reason [' + err.message + ']');
                 } else {
                     resolve();
                 }
             });
-        })
-            .then(function(){
-                new Promise(function(resolve, reject){
-                    mysql_connection.query(content, function(err){
+        }).then(function(){
+            new Promise(function(resolve){
+                mysql_connection.query(content, function (err) {
+                    if (err) {
+                        rollback_end();
+
+                        error('can not apply migration[' + migration.version + ']');
+                        error('can not execute query. reason [' + err.message + ']');
+                    } else {
+                        resolve();
+                    }
+                });
+            }).then(function(){
+                new Promise(function(resolve){
+                    let to_insert = {
+                        version: migration.version,
+                        hash_sum: migration.hash_sum,
+                        name: migration.name
+                    };
+
+                    mysql_connection.query('INSERT INTO migration_schema SET ?', to_insert, function(err){
                         if (err) {
-                            mysql_connection.rollback();
+                            rollback_end();
 
                             error('can not apply migration[' + migration.version + ']');
-                            reject({
-                                message: 'can not execute query. reason [' + err.message + ']'
-                            });
+                            error('can not execute query. reason [' + err.message + ']');
                         } else {
                             resolve();
                         }
-                    })
-                })
-                    .then(function(){
-                        new Promise(function(resolve, reject){
-                            let to_insert = {
-                            version: migration.version,
-                            hash_sum: migration.hash_sum,
-                            name: migration.name
-                        };
-                            mysql_connection.query('INSERT INTO migration_schema SET ?', to_insert, function(err){
-                                if (err) {
-                                    mysql_connection.rollback();
+                    });
+                }).then(function(){
+                    new Promise(function(resolve){
+                        mysql_connection.commit(function(err) {
+                            if (err) {
+                                rollback_end();
 
-                                    error('can not apply migration[' + migration.version + ']');
-                                    reject({
-                                        message: 'can not execute query. reason [' + err.message + ']'
-                                    });
-                                } else {
-                                    resolve();
-                                }
-                            })
-                        })
-                            .then(function(){
-                                new Promise(function(resolve, reject){
-                                    mysql_connection.commit(function(err) {
-                                        if (err) {
-                                            error('can not apply migration[' + migration.version + ']');
-                                            reject({
-                                                message: 'can not execute query. reason [' + err.message + ']'
-                                            });
-                                        } else {
-                                            info('migration [' + migration.version + '][' + migration.name + '] successfully applied');
+                                error('can not apply migration[' + migration.version + ']');
+                                error('can not commit transaction. reason [' + err.message + ']');
+                            } else {
+                                info('migration [' + migration.version + '][' + migration.name + '] successfully applied');
 
-                                            resolve();
-                                        }
-                                    });
-                                })
-                                    .then(function(){
-                                        global_resolve();
-                                    })
-                                    .catch(function(err){
-                                        error(err.message);
-                                    });
-                            })
-                            .catch(function(err){
-                                error(err.message);
-                            })
-                    })
-                    .catch(function(err){
-                        error(err.message);
-                    })
-            })
-            .catch(function(err){
-                error(err.message);
-            })
+                                resolve();
+                            }
+                        });
+                    }).then(function(){
+                        global_resolve();
+                    });
+                });
+            });
+        });
     });
 }
 
@@ -340,6 +324,7 @@ function apply_migration(mysql_connection, migration, content) {
  *
  * @param mysql_connection {Connection} -  to work with database
  * @param migrations {object[]} - all existed migrations data
+ * @param callback {function} - callback on check end. accept one parameter: not applied migration version or null if all is applied
  */
 function check_old_migrations_checksum(mysql_connection, migrations, callback) {
     "use strict";
